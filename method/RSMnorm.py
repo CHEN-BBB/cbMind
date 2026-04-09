@@ -1,21 +1,23 @@
 import torch
 import torch.nn as nn
 
+
 class RMSNorm(nn.Module):
     """
     RMS归一化 (Root Mean Square Normalization)
     相比LayerNorm，RMSNorm去掉了均值中心化，只保留方差缩放
     计算更简单，效果相当，在大模型中广泛使用
     """
+
     def __init__(self, dim: int, eps: float = 1e-5):
         """
         Args:
             dim: 归一化的维度大小
             eps: 防止除零的小常数
         """
-        super().__init__()                              # 调用父类nn.Module的构造函数
-        self.dim = dim                                  # 存储维度大小 
-        self.eps = eps                                  # 存储epsilon值
+        super().__init__()  # 调用父类nn.Module的构造函数
+        self.dim = dim  # 存储维度大小
+        self.eps = eps  # 存储epsilon值
         # nn.Parameter: 将tensor注册为可学习参数，会自动加入optimizer
         # torch.ones(dim): 创建全1的tensor作为缩放参数
         self.weight = nn.Parameter(torch.ones(dim))
