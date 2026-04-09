@@ -14,7 +14,7 @@ from torch import optim  # 优化器
 from torch.nn.parallel import DistributedDataParallel  # 分布式数据并行
 from torch.utils.data import DataLoader, DistributedSampler  # 数据加载器
 
-from model.Model import cbMindConfig
+from model.model import cbMindConfig
 from dataset.lm_dataset import PretrainDataset
 from trainer.trainer_utils import (  # 训练工具函数
     get_lr,
@@ -57,7 +57,8 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
             )  # ！修正：直接传入labels和attention_mask，由模型内部计算loss
 
             loss = (
-                res.loss + res.aux_loss
+                # res.loss + res.aux_loss
+                res.loss  # ！修正：原代码中res.aux_loss是MoE模型的额外损失项，现暂时注释掉，专注于主损失的训练
             )  # ！修正：原手动计算loss_fct+loss_mask，现用模型内置的loss
 
             loss = loss / args.accumulation_steps  # 梯度累积：将损失除以累积步数，平均每个小批次的损失，避免梯度过大

@@ -133,7 +133,7 @@ def init_model(
     device="cuda",
 ):
     from transformers import AutoTokenizer
-    from model.cbModel import cbMindForCausalLM
+    from model.model import cbMindForCausalLM
 
     # 如果没有指定 tokenizer_path，使用项目根目录下的 model 文件夹
     if tokenizer_path is None:
