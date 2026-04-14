@@ -123,8 +123,8 @@
 cbMind训练数据集下载地址： [ModelScope](https://www.modelscope.cn/datasets/gongjy/cbMind_dataset/files) | [HuggingFace](https://huggingface.co/datasets/jingyaogong/cbMind_dataset/tree/main)
 
 > 无需全部clone，可单独下载所需的文件
-> 下载单个文件到指定本地文件夹（以下载README.md到当前路径下“dir”目录为例）
-> modelscope download --dataset gongjy/minimind_dataset README.md --local_dir ./dataset
+> 下载单个文件到指定本地文件夹（以下载pretrain_t2t_mini.jsonl到当前路径下“dataset”目录为例）
+> modelscope download --dataset gongjy/minimind_dataset pretrain_t2t_mini.jsonl --local_dir ./dataset
 
 将下载的数据集文件放到`./dataset/`目录下（✨为推荐的必须项）
 
@@ -134,10 +134,15 @@ cbMind训练数据集下载地址： [ModelScope](https://www.modelscope.cn/data
 ├── agent_rl_math.jsonl (18MB)
 ├── dpo.jsonl (53MB)
 ├── pretrain_t2t_mini.jsonl (1.2GB, ✨)
+├── lora_exam.jsonl (24.65MB)
+├── lora_identity.jsonl (22.70KB)
+├── lora_medical.jsonl (34.00MB)
 ├── pretrain_t2t.jsonl (10GB)
+├── pretrain_t2t_mini.jsonl (1.24GB)
 ├── rlaif.jsonl (24MB, ✨)
 ├── sft_t2t_mini.jsonl (1.6GB, ✨)
 └── sft_t2t.jsonl (14GB)
+
 ```
 
 <details>
