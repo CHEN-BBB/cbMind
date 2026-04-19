@@ -12,7 +12,7 @@ import warnings  # 警告控制
 import torch  # PyTorch深度学习框架
 import torch.distributed as dist  # 分布式训练支持
 import torch.nn.functional as F  # 神经网络函数
-from transformers import AutoTokenizer  # HuggingFace分词器
+from transformers import AutoTokenizer, AutoConfig  # HuggingFace分词器
 from contextlib import nullcontext  # 上下文管理器
 from torch import optim, nn  # 优化器和神经网络
 from torch.nn.parallel import DistributedDataParallel  # 分布式并行
@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader, DistributedSampler  # 数据加载
 from torch.nn.utils import clip_grad_norm_  # 梯度裁剪
 from torch.optim.lr_scheduler import CosineAnnealingLR  # 余弦退火学习率调度
 from transformers import AutoModel  # HuggingFace模型加载
+from huggingface_hub import snapshot_download  # HuggingFace模型下载
 from model.model import cbMindConfig, cbMindForCausalLM  # MiniMind模型
 from dataset.lm_dataset import RLAIFDataset  # RL数据集
 from trainer.trainer_utils import (  # 训练工具函数
@@ -94,38 +95,39 @@ def calculate_rewards(prompts, responses, reward_model, reward_tokenizer):
 
     rewards = torch.zeros(len(responses), device=args.device)
 
-    if args.reasoning == 1:
-        rewards = reasoning_model_reward(rewards)
+    rewards = reasoning_model_reward(rewards)
     # ==========Reward模型评分部分==========
     with torch.no_grad():
         reward_model_scores = []
         for prompt, response in zip(prompts, responses):
-            pattern = r"<\|im_start\|>(system|user|assistant)\s+(.*?)<\|im_end\|>"
-            matches = re.findall(pattern, prompt, re.DOTALL)
             messages = [
-                {"role": role, "content": content.strip()} for role, content in matches
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": response},
             ]
 
-            tmp_chat = messages + [{"role": "assistant", "content": response}]
             score = reward_model.get_score(
-                reward_tokenizer, tmp_chat
-            )  # ！修正：原get_reward(tmp_chat, reward_tokenizer)方法名和参数顺序错误
+                reward_tokenizer,
+                messages
+            )
 
+            # scale奖励分数，防止极端值对训练造成不稳定
             scale = 3.0
             score = max(min(score, scale), -scale)
 
-            if args.reasoning == 1:
-                answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
-                if answer_match:
-                    answer_content = answer_match.group(1).strip()
-                    # 对answer内容单独计算reward
-                    tmp_chat = messages + [
-                        {"role": "assistant", "content": answer_content}
-                    ]
-                    answer_score = reward_model.get_score(reward_tokenizer, tmp_chat)
-                    answer_score = max(min(answer_score, scale), -scale)
-                    # 📚 加权组合
-                    score = score * 0.4 + answer_score * 0.6
+            # ✅ 如果回答中包含<answer>标签，则单独计算answer部分的奖励，并加权组合
+            answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
+            if answer_match:
+                answer_content = answer_match.group(1).strip()
+                answer_messages = [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": answer_content},
+                ]
+                answer_score = reward_model.get_score(
+                    reward_tokenizer,
+                    answer_messages
+                )
+                answer_score = max(min(answer_score, scale), -scale)
+                score = score * 0.4 + answer_score * 0.6
             reward_model_scores.append(score)
 
         reward_model_scores = torch.tensor(reward_model_scores, device=args.device)
@@ -437,7 +439,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_path",
         type=str,
-        default="../dataset/rlaif-mini.jsonl",
+        default="../dataset/rlaif.jsonl",
         help="RLAIF数据路径",
     )
 
@@ -459,7 +461,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--reward_model_path",
         type=str,
-        default="../../internlm2-1_8b-reward",
+        default="../model/internlm2-1_8b-reward",
         help="Reward模型路径",
     )
 
@@ -542,12 +544,27 @@ if __name__ == "__main__":
     critic_model = critic_model.to(args.device)
 
     # 📚 Reward模型（奖励函数）
+    model_name = "internlm/internlm2-1_8b-reward"
+    cache_dir = args.reward_model_path if os.path.isdir(args.reward_model_path) else None
+    model_path = snapshot_download(
+      repo_id=model_name,
+      cache_dir=cache_dir,
+      local_files_only=False
+    )
+
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    # 修复 rope_scaling 配置，如果缺少 'type' 键
+    if hasattr(config, 'rope_scaling') and config.rope_scaling is not None:
+        if 'type' not in config.rope_scaling:
+            config.rope_scaling['type'] = 'linear'  # 或其他适当的类型，如 'linear'
+        if 'factor' not in config.rope_scaling:
+            config.rope_scaling['factor'] = 4.0
     reward_model = AutoModel.from_pretrained(
-        args.reward_model_path, torch_dtype=torch.float16, trust_remote_code=True
+        model_path, config=config, torch_dtype=torch.float16, trust_remote_code=True,
     )
     reward_model = reward_model.to(args.device).eval().requires_grad_(False)
     reward_tokenizer = AutoTokenizer.from_pretrained(
-        args.reward_model_path, trust_remote_code=True
+        model_path, trust_remote_code=True
     )
 
     # 📚 数据和优化器
