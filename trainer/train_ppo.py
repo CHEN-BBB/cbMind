@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, DistributedSampler  # 数据加载
 from torch.nn.utils import clip_grad_norm_  # 梯度裁剪
 from torch.optim.lr_scheduler import CosineAnnealingLR  # 余弦退火学习率调度
 from transformers import AutoModel  # HuggingFace模型加载
-from huggingface_hub import snapshot_download  # HuggingFace模型下载
+from modelscope import snapshot_download  # HuggingFace模型下载
 from model.model import cbMindConfig, cbMindForCausalLM  # MiniMind模型
 from dataset.lm_dataset import RLAIFDataset  # RL数据集
 from trainer.trainer_utils import (  # 训练工具函数
@@ -156,6 +156,7 @@ def ppo_train_epoch(
 
     for step, batch in enumerate(loader, start=start_step + 1):
         prompts = batch["prompt"]
+        tokenizer.padding_side = "left"
         # 编码输入
         enc = tokenizer(
             prompts,
@@ -163,6 +164,7 @@ def ppo_train_epoch(
             padding=True,
             truncation=True,
             max_length=args.max_seq_len,
+            padding_side="left",
         ).to(args.device)
         # 计算每个prompt的长度（用于后续处理）
         prompt_lengths = enc.attention_mask.sum(dim=1)
@@ -194,7 +196,7 @@ def ppo_train_epoch(
         rewards = calculate_rewards(
             prompts, responses_text, reward_model, reward_tokenizer
         )
-
+        rewards = torch.clamp(rewards, -5.0, 5.0)
         # 创建一个mask，用于标记哪些位置上是有效token
         full_mask = (gen_out != tokenizer.pad_token_id).long()
         # critic模型进行价值估计
@@ -205,6 +207,7 @@ def ppo_train_epoch(
         values = value_seq[torch.arange(len(last_indices)), last_indices]
         # advantage=reward-估计的value
         advantages = rewards - values.detach()  # [B]
+        
 
         # 计算actor log，表示actor对这个答案的“信心”
         # 先生成logits
@@ -226,8 +229,9 @@ def ppo_train_epoch(
         ) >= prompt_lengths.unsqueeze(1)
 
         final_mask = resp_mask & (~labels.eq(tokenizer.pad_token_id))
+        valid_tokens = final_mask.sum(dim=1).clamp(min=1)
         # 把所有response部分的log概率加起来，得到每条序列的总log概率
-        actor_logp = (logp_tokens * final_mask).sum(dim=1)
+        actor_logp = (logp_tokens * final_mask).sum(dim=1) / valid_tokens
 
         # 计算old和ref log的概率
         # old用于防止策略更新过大，ref用于计算KL惩罚，防止模型忘本
@@ -240,7 +244,7 @@ def ppo_train_epoch(
                 .gather(2, labels.unsqueeze(-1))
                 .squeeze(-1)
             )  # [B, P+R-1]
-            old_logp = (old_logp_tokens * final_mask).sum(dim=1)  # [B]
+            old_logp = (old_logp_tokens * final_mask).sum(dim=1) / valid_tokens  # [B]
 
             ref_logits = ref_model(
                 input_ids=gen_out, attention_mask=full_mask
@@ -250,14 +254,17 @@ def ppo_train_epoch(
                 .gather(2, labels.unsqueeze(-1))
                 .squeeze(-1)
             )  # [B, P+R-1]
-            ref_logp = (ref_logp_tokens * final_mask).sum(dim=1)  # [B]
+            ref_logp = (ref_logp_tokens * final_mask).sum(dim=1) / valid_tokens  # [B]
 
-        # 计算KL散度和ratio
+        # 计算KL散度和ratio,old_logp是旧策略的log概率，actor_logp是新策略的log概率，kl表示新旧策略之间的平均KL散度
         kl = (actor_logp - old_logp).mean()
         # 计算当前策略和参考策略之间的KL散度，作为KL惩罚项，鼓励新策略不要偏离参考策略太远，保持一定的稳定性
         kl_ref = (actor_logp - ref_logp).mean()
         ratio = torch.exp(actor_logp - old_logp)  # [B]
 
+        print("actor_logp:", actor_logp.mean().item())
+        print("ref_logp:", ref_logp.mean().item())
+        print("kl_ref:", kl_ref.item())
         # PPO裁剪损失,表示新旧策略的概率比率，乘以优势函数，得到PPO的目标函数
         # 通过clamp限制ratio在1±clip_epsilon范围内，防止策略更新过大
         surr1 = ratio * advantages  # [B]
@@ -392,14 +399,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--epochs", type=int, default=1, help="训练轮数")
     parser.add_argument(
-        "--batch_size", type=int, default=2, help="batch size（PPO batch较小）"
+        "--batch_size", type=int, default=8, help="batch size（PPO batch较小）"
     )
 
     # 📚 PPO学习率设置
     # PPO学习率通常很小，避免策略剧烈变化
-    parser.add_argument("--learning_rate", type=float, default=8e-8, help="Actor学习率")
+    parser.add_argument("--learning_rate", type=float, default=2e-5, help="Actor学习率")
     parser.add_argument(
-        "--critic_learning_rate", type=float, default=8e-8, help="Critic学习率"
+        "--critic_learning_rate", type=float, default=2e-5, help="Critic学习率"
     )
 
     # ========== 硬件配置 ==========
@@ -414,7 +421,7 @@ if __name__ == "__main__":
 
     # ========== 训练策略 ==========
     parser.add_argument(
-        "--accumulation_steps", type=int, default=1, help="梯度累积步数"
+        "--accumulation_steps", type=int, default=4, help="梯度累积步数"
     )
     parser.add_argument("--grad_clip", type=float, default=1.0, help="梯度裁剪阈值")
     parser.add_argument("--log_interval", type=int, default=1, help="日志打印间隔")
@@ -432,8 +439,8 @@ if __name__ == "__main__":
     )
 
     # ========== PPO生成参数 ==========
-    parser.add_argument("--max_seq_len", default=66, type=int, help="Prompt最大长度")
-    parser.add_argument("--max_gen_len", type=int, default=1536, help="生成的最大长度")
+    parser.add_argument("--max_seq_len", default=64, type=int, help="Prompt最大长度")
+    parser.add_argument("--max_gen_len", type=int, default=768, help="生成的最大长度")
 
     # ========== 数据和模型参数 ==========
     parser.add_argument(
@@ -450,8 +457,8 @@ if __name__ == "__main__":
         default=0.1,
         help="PPO裁剪参数（控制策略更新幅度）",
     )
-    parser.add_argument("--vf_coef", type=float, default=0.5, help="Value function系数")
-    parser.add_argument("--kl_coef", type=float, default=0.02, help="KL散度惩罚系数")
+    parser.add_argument("--vf_coef", type=float, default=0.1, help="Value function系数")
+    parser.add_argument("--kl_coef", type=float, default=0.01, help="KL散度惩罚系数")
 
     parser.add_argument(
         "--update_old_actor_freq", type=int, default=4, help="更新old_actor_model的频率"
@@ -544,7 +551,7 @@ if __name__ == "__main__":
     critic_model = critic_model.to(args.device)
 
     # 📚 Reward模型（奖励函数）
-    model_name = "internlm/internlm2-1_8b-reward"
+    model_name = "Shanghai_AI_Laboratory/internlm2-1_8b-reward"
     cache_dir = args.reward_model_path if os.path.isdir(args.reward_model_path) else None
     model_path = snapshot_download(
       repo_id=model_name,
@@ -610,6 +617,10 @@ if __name__ == "__main__":
         critic_model = DistributedDataParallel(critic_model, device_ids=[local_rank])
         old_actor_model.to(args.device)
 
+    print("Device:", args.device)
+    print("Actor on:", next(actor_model.parameters()).device)
+    print("Critic on:", next(critic_model.parameters()).device)
+    print("Reward model on:", next(reward_model.parameters()).device)
     # ========== 8. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
