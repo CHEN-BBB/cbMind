@@ -9,6 +9,8 @@ dependencies = [
     "pandas>=2.3.3",
     "torch>=2.9.0",
     "transformers>=4.57.1",
+    "einops>=0.4.0",
+    "protobuf>=6.28.0",
 ]
 [tool.ruff]
 select = ["E", "F", "W", "C90"]

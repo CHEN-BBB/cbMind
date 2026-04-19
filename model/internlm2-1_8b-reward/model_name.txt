@@ -1,0 +1,2 @@
+modelscope: Shanghai_AI_Laboratory/internlm2-1_8b-reward
+huggingface_hub:internlm/internlm2-1_8b-reward
