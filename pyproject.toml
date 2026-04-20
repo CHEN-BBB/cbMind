@@ -11,6 +11,7 @@ dependencies = [
     "transformers>=4.57.1",
     "einops>=0.4.0",
     "protobuf>=6.28.0",
+    "modelscope>=1.0.0",
 ]
 [tool.ruff]
 select = ["E", "F", "W", "C90"]

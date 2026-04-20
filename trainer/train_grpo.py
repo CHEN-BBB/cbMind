@@ -11,6 +11,8 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from transformers import AutoTokenizer, AutoModel
+from transformers import AutoConfig
+from modelscope import snapshot_download
 
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -95,7 +97,7 @@ def calculate_rewards(prompts, responses, reward_model, reward_tokenizer):
                             reward_tokenizer, answer_chat
                         )
                         answer_score = max(min(answer_score, scale), -scale)
-                        score = score * 0.4 + answer_score * 0.6
+                        score = score * 0.4 + answer_score * 0.6  # 综合考虑整体和答案部分的得分
 
                 reward_model_scores.append(score)
 
@@ -319,7 +321,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_path",
         type=str,
-        default="../dataset/rlaif-mini.jsonl",
+        default="../dataset/rlaif.jsonl",
         help="RLAIF数据路径",
     )
     parser.add_argument(
@@ -329,7 +331,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--reward_model_path",
         type=str,
-        default="../../internlm2-1_8b-reward",
+        default="../model/internlm2-1_8b-reward",
         help="Reward模型路径",
     )
     parser.add_argument(
@@ -384,12 +386,27 @@ if __name__ == "__main__":
     ref_model, _ = init_model(lm_config, base_weight, device=args.device)
     ref_model = ref_model.eval().requires_grad_(False)
 
+    model_name = "Shanghai_AI_Laboratory/internlm2-1_8b-reward"
+    cache_dir = args.reward_model_path if os.path.isdir(args.reward_model_path) else None
+    model_path = snapshot_download(
+      repo_id=model_name,
+      cache_dir=cache_dir,
+      local_files_only=False
+    )
+
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    # 修复 rope_scaling 配置，如果缺少 'type' 键
+    if hasattr(config, 'rope_scaling') and config.rope_scaling is not None:
+        if 'type' not in config.rope_scaling:
+            config.rope_scaling['type'] = 'linear'  # 或其他适当的类型，如 'linear'
+        if 'factor' not in config.rope_scaling:
+            config.rope_scaling['factor'] = 4.0
     reward_model = AutoModel.from_pretrained(
-        args.reward_model_path, torch_dtype=torch.float16, trust_remote_code=True
+        model_path, config=config, torch_dtype=torch.float16, trust_remote_code=True,
     )
     reward_model = reward_model.to(args.device).eval().requires_grad_(False)
     reward_tokenizer = AutoTokenizer.from_pretrained(
-        args.reward_model_path, trust_remote_code=True
+        model_path, trust_remote_code=True
     )
 
     train_ds = RLAIFDataset(
