@@ -63,16 +63,15 @@ def calculate_rewards(prompts, responses, reward_model, reward_tokenizer):
         return rewards_tensor
 
     rewards = torch.zeros(len(responses), device=args.device)
-    if args.reasoning == 1:
-        rewards = reasoning_model_reward(rewards)
+    rewards = reasoning_model_reward(rewards)
 
     with torch.no_grad():
         reward_model_scores = []
         scale = 3.0
 
         for i, prompt in enumerate(prompts):
-            pattern = r"<\|im_start\|>(system|user|assistant)\s+(.*?)<\|im_end\|>"
-            matches = re.findall(pattern, prompt, re.DOTALL)
+            pattern = r"<\|im_start\|>(system|user|assistant)\s+(.*?)<\|im_end\|>"  #
+            matches = re.findall(pattern, prompt, re.DOTALL)   # 匹配系统、用户和助手的内容
             messages = [
                 {"role": role, "content": content.strip()} for role, content in matches
             ]
@@ -84,20 +83,19 @@ def calculate_rewards(prompts, responses, reward_model, reward_tokenizer):
                 score = reward_model.get_score(reward_tokenizer, tmp_chat)
                 score = max(min(score, scale), -scale)
 
-                if args.reasoning == 1:
-                    answer_match = re.search(
-                        r"<answer>(.*?)</answer>", response, re.DOTALL
+                answer_match = re.search(
+                    r"<answer>(.*?)</answer>", response, re.DOTALL
+                )
+                if answer_match:
+                    answer_content = answer_match.group(1).strip()
+                    answer_chat = messages + [
+                        {"role": "assistant", "content": answer_content}
+                    ]
+                    answer_score = reward_model.get_score(
+                        reward_tokenizer, answer_chat
                     )
-                    if answer_match:
-                        answer_content = answer_match.group(1).strip()
-                        answer_chat = messages + [
-                            {"role": "assistant", "content": answer_content}
-                        ]
-                        answer_score = reward_model.get_score(
-                            reward_tokenizer, answer_chat
-                        )
-                        answer_score = max(min(answer_score, scale), -scale)
-                        score = score * 0.4 + answer_score * 0.6  # 综合考虑整体和答案部分的得分
+                    answer_score = max(min(answer_score, scale), -scale)
+                    score = score * 0.4 + answer_score * 0.6  # 综合考虑整体和答案部分的得分
 
                 reward_model_scores.append(score)
 
@@ -380,6 +378,7 @@ if __name__ == "__main__":
     base_weight = "full_sft"
 
     model, tokenizer = init_model(lm_config, base_weight, device=args.device)
+    tokenizer.padding_side = "left"
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -408,6 +407,7 @@ if __name__ == "__main__":
     reward_tokenizer = AutoTokenizer.from_pretrained(
         model_path, trust_remote_code=True
     )
+    reward_tokenizer.padding_side = "left"
 
     train_ds = RLAIFDataset(
         args.data_path, tokenizer, max_length=lm_config.max_position_embeddings

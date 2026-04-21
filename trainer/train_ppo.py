@@ -573,6 +573,7 @@ if __name__ == "__main__":
     reward_tokenizer = AutoTokenizer.from_pretrained(
         model_path, trust_remote_code=True
     )
+    reward_tokenizer.padding_side = "left"
 
     # 📚 数据和优化器
     train_ds = RLAIFDataset(

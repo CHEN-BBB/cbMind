@@ -342,7 +342,7 @@ if __name__ == "__main__":
     # 📚 DPO数据集
     train_ds = DPODataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
+    scaler = torch.amp.GradScaler(enabled=(args.dtype == "float16"))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
     # ========== 6. 从ckp恢复状态 ==========
